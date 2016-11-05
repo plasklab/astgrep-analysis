@@ -46,13 +46,15 @@ bool AstgrepPass::runOnFunction(Function &F) {
           Instruction* instruction = memoryUseOrDef->getMemoryInst();
           if (instruction != nullptr) {
             instruction->dump();
+            if(instruction->hasMetadata()) {
+              instruction->getDebugLoc().dump();
+            }
           }
         }
       }
     }
     errs() << "\n";
   }
-
   return false;
 }
 
