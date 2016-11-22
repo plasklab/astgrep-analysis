@@ -2,8 +2,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Transforms/Utils/MemorySSA.h"
-#include <set>
-#include <map>
 
 using namespace llvm;
 
@@ -18,10 +16,10 @@ namespace {
 
     virtual bool runOnFunction(Function &F);
     virtual void getAnalysisUsage(AnalysisUsage &AU) const;
+    void dumpInstSet(InstSet instSet);
 
-    // instruction の前後で生存しているinstructionを保存(メモリに関するものだけ)
+    // contain instructions which lives before/after a instruction
     // instruction じゃなっくて変数まで剥いてやったほうがはやそう
-    // instruction からdubugLocを取得できる
     std::map<Instruction*, InstSet> instLiveBefore;
     std::map<Instruction*, InstSet> instLiveAfter;
 
@@ -29,6 +27,7 @@ namespace {
     void upAndMark(InstSet clobberingInsts, Instruction* useInst, BasicBlock* useBB);
     void upAndMarkRec(InstSet clobberingInsts, BasicBlock* bb);
     InstSet assembleClobberingMemoryInst(MemoryAccess* clobberingMA, MemorySSAWalker* walker);
+    void dumpLiveInfo(Function* F);
   };
 }
 
@@ -42,16 +41,9 @@ bool AstgrepPass::runOnFunction(Function &F) {
   MemorySSA* MSSA = &getAnalysis<MemorySSAWrapperPass>().getMSSA();
   MemorySSAWalker* walker = MSSA->getWalker();
 
-  // want to traverse all memory allocated variables
-  // TODO: how to get all memory allocated variables?
-  //  - Get all MemoryAccess by traversing and casting (to MA) instructions
-  //  - get information from Basic Alias Analysis?
-
   // initialize
   for(Function::iterator fit = F.begin(); fit != F.end(); fit++) {
     BasicBlock* bb = &*fit;
-    errs() << "[basic block]";
-    bb->dump();
     for(BasicBlock::iterator bbit = bb->begin(); bbit != bb->end(); bbit++) {
       Instruction* i = &*bbit;
       this->instLiveAfter[i] = new std::set<Instruction*>();
@@ -78,9 +70,7 @@ bool AstgrepPass::runOnFunction(Function &F) {
         MemoryAccess* clobberingMA = walker->getClobberingMemoryAccess(MA);
         InstSet clobberingInsts = this->assembleClobberingMemoryInst(clobberingMA, walker);
         errs() << "---clobberingInstsBegin---" << "\n";
-        for (auto clobbering = clobberingInsts->begin(); clobbering != clobberingInsts->end(); clobbering++) {
-          (*clobbering)->dump();
-        }
+        this->dumpInstSet(clobberingInsts);
         errs() << "---clobberingInstsEnd---" << "\n";
 
         // propagate live information of definitons forward from inst(use) to definitions
@@ -88,16 +78,20 @@ bool AstgrepPass::runOnFunction(Function &F) {
       }
     }
   }
+  // this->dumpLiveInfo(&F);
   return false;
 }
 
 void AstgrepPass::upAndMark(InstSet clobberingInsts, Instruction* useInst, BasicBlock* useBB) {
+  /**
+   * TODO: do not propate all Memoary Access for MemoryPhi
+   *       into both predecessor basic blocks
+   **/
   errs() << "---start---" << "\n";
   bool liveUseInst = false;
   for(BasicBlock::reverse_iterator bbit = useBB->rbegin();
       bbit != useBB->rend() && clobberingInsts->count(&*bbit) == 0;
       bbit++) {
-    // TODO: include first instruction of basic block
     Instruction* i = &*bbit;
     if (liveUseInst) {
       i->dump();
@@ -159,6 +153,27 @@ InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* clobberingMA, Me
     }
   }
   return instSet;
+}
+
+void AstgrepPass::dumpInstSet(InstSet instSet) {
+  for (auto inst = instSet->begin(); inst != instSet->end(); inst++) {
+    (*inst)->dump();
+  }
+}
+
+void AstgrepPass::dumpLiveInfo(Function* F){
+  for(Function::iterator fit = F->begin(); fit != F->end(); fit++) {
+    for (BasicBlock::iterator bbit = (&*fit)->begin(); bbit != (&*fit)->end(); bbit++) {
+      Instruction* inst = &*bbit;
+      errs() << "live before start" << "\n";
+      this->dumpInstSet(this->instLiveBefore[inst]);
+      errs() << "live before end" << "\n";
+      inst->dump();
+      errs() << "live after start" << "\n";
+      this->dumpInstSet(this->instLiveAfter[inst]);
+      errs() << "live after end" << "\n";
+    }
+  }
 }
 
 char AstgrepPass::ID = 0;
