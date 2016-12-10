@@ -8,6 +8,7 @@
 using namespace llvm;
 
 typedef std::set<Instruction*>* InstSet;
+typedef std::set<const Value*>* ValueSet;
 
 namespace {
   class AstgrepPass : public FunctionPass {
@@ -20,17 +21,16 @@ namespace {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const;
     void dumpInstSet(InstSet instSet);
 
-    std::map<Instruction*, InstSet> instLiveBefore;
-    std::map<Instruction*, InstSet> instLiveAfter;
+    std::map<Instruction*, ValueSet> instLiveBefore;
+    std::map<Instruction*, ValueSet> instLiveAfter;
 
   private:
     MemorySSA* MSSA;
     MemorySSAWalker* walker;
 
-    void upAndMark(InstSet clobberingInsts, Instruction* useInst, BasicBlock* useBB);
-    void upAndMarkRec(InstSet clobberingInsts, BasicBlock* bb);
+    void upAndMark(InstSet clobberingInsts, const Value* value, Instruction* startInst, BasicBlock* startBB);
+    void upAndMarkRec(InstSet clobberingInsts, const Value* value, BasicBlock* bb);
     InstSet assembleClobberingMemoryInst(MemoryAccess* clobberingMA, const MemoryLocation* tartgetLoc);
-    void dumpLiveInfo(Function* F);
   };
 }
 
@@ -49,8 +49,8 @@ bool AstgrepPass::runOnFunction(Function &F) {
     BasicBlock* bb = &*fit;
     for(BasicBlock::iterator bbit = bb->begin(); bbit != bb->end(); bbit++) {
       Instruction* i = &*bbit;
-      this->instLiveAfter[i] = new std::set<Instruction*>();
-      this->instLiveBefore[i] = new std::set<Instruction*>();
+      this->instLiveAfter[i] = new std::set<const Value*>();
+      this->instLiveBefore[i] = new std::set<const Value*>();
     }
   }
 
@@ -72,6 +72,7 @@ bool AstgrepPass::runOnFunction(Function &F) {
 
         // MemoryUse が使用する MemoryLocation を取得しておく
         MemoryLocation location = MemoryLocation::get(inst);
+        const Value* value = location.Ptr;
 
         // MA の clobbering instruction の集合を見つける.
         InstSet clobberingInsts = this->assembleClobberingMemoryInst(MA, &location);
@@ -82,54 +83,67 @@ bool AstgrepPass::runOnFunction(Function &F) {
 
         // propagate live information of definitons forward from inst(use) to definitions
         // TODO: instruction ではなくて、Value の生存情報を伝播させる。
-        this->upAndMark(clobberingInsts, inst, bb);
+        this->upAndMark(clobberingInsts, value, inst, bb);
       }
     }
   }
   return false;
 }
 
-void AstgrepPass::upAndMark(InstSet clobberingInsts, Instruction* useInst, BasicBlock* useBB) {
+void AstgrepPass::upAndMark(InstSet clobberingInsts, const Value* value, Instruction* startInst, BasicBlock* startBB) {
   /**
    * TODO: do not propate all Memoary Access for MemoryPhi
    *       into both predecessor basic blocks
    **/
   errs() << "---start---" << "\n";
-  bool liveUseInst = false;
-  for(BasicBlock::reverse_iterator bbit = useBB->rbegin();
-      bbit != useBB->rend() && clobberingInsts->count(&*bbit) == 0;
-      bbit++) {
-    // 基本ブロック先頭にたどり着くか、clobberingInsts のうちどれかにたどり着いたら終了
+
+  //
+  bool alive = false;
+  for(BasicBlock::reverse_iterator bbit = startBB->rbegin();
+      bbit != startBB->rend(); bbit++) {
     Instruction* i = &*bbit;
-    if (liveUseInst) {
-      // i->dump();
-      this->instLiveAfter[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
-      this->instLiveBefore[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
+    if (alive) {
+      if (clobberingInsts->find(i) != clobberingInsts->end()) {
+        // 定義命令までたどり着いた場合
+        this->instLiveAfter[i]->insert(value);
+        return;
+      } else {
+        this->instLiveAfter[i]->insert(value);
+        this->instLiveBefore[i]->insert(value);
+        i->dump();
+      }
     }
-    if (i == useInst) {
-      this->instLiveBefore[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
-      liveUseInst = true;
+    if (i == startInst) {
+      this->instLiveBefore[i]->insert(value);
+      alive = true;
     }
   }
-  for (auto predBB = pred_begin(useBB); predBB != pred_end(useBB); predBB++) {
-    this->upAndMarkRec(clobberingInsts, *predBB);
+
+  // CFG を更に前方に辿っていく
+  for (auto predBB = pred_begin(startBB); predBB != pred_end(startBB); predBB++) {
+    this->upAndMarkRec(clobberingInsts, value, *predBB);
   }
   errs() << "---end---" << "\n";
 }
 
-void AstgrepPass::upAndMarkRec(InstSet clobberingInsts, BasicBlock* bb) {
+void AstgrepPass::upAndMarkRec(InstSet clobberingInsts, const Value* value, BasicBlock* bb) {
   for(BasicBlock::reverse_iterator bbit = bb->rbegin();
-      bbit != bb->rend() && clobberingInsts->count(&*bbit) == 0;
-      bbit++) {
+      bbit != bb->rend(); bbit++) {
     // 基本ブロック先頭にたどり着くか、clobberingInsts のうちどれかにたどり着いたら終了
     Instruction* i = &*bbit;
-    // i->dump();
-    this->instLiveAfter[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
-    this->instLiveBefore[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
+    if (clobberingInsts->find(i) != clobberingInsts->end()) {
+      // 定義命令までたどり着いた場合
+      this->instLiveAfter[i]->insert(value);
+      return;
+    } else {
+      this->instLiveAfter[i]->insert(value);
+      this->instLiveBefore[i]->insert(value);
+      i->dump();
+    }
   }
 
   for (auto predBB = pred_begin(bb); predBB != pred_end(bb); predBB++) {
-    this->upAndMarkRec(clobberingInsts, *predBB);
+    this->upAndMarkRec(clobberingInsts, value, *predBB);
   }
 }
 
@@ -175,21 +189,6 @@ InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* MA, const Memory
 void AstgrepPass::dumpInstSet(InstSet instSet) {
   for (auto inst = instSet->begin(); inst != instSet->end(); inst++) {
     (*inst)->dump();
-  }
-}
-
-void AstgrepPass::dumpLiveInfo(Function* F){
-  for(Function::iterator fit = F->begin(); fit != F->end(); fit++) {
-    for (BasicBlock::iterator bbit = (&*fit)->begin(); bbit != (&*fit)->end(); bbit++) {
-      Instruction* inst = &*bbit;
-      errs() << "live before start" << "\n";
-      this->dumpInstSet(this->instLiveBefore[inst]);
-      errs() << "live before end" << "\n";
-      inst->dump();
-      errs() << "live after start" << "\n";
-      this->dumpInstSet(this->instLiveAfter[inst]);
-      errs() << "live after end" << "\n";
-    }
   }
 }
 
