@@ -58,16 +58,10 @@ bool AstgrepPass::runOnFunction(Function &F) {
     BasicBlock* bb = &*fit;
     for(BasicBlock::iterator bbit = bb->begin(); bbit != bb->end(); bbit++) {
       Instruction* inst = &*bbit;
-      inst->dump();
 
       // 各MemoryUseについて処理
       MemoryAccess* MA = MSSA->getMemoryAccess(inst);
-      if (MA != nullptr) {
-        MA->dump();
-        if (!isa<MemoryUse>(MA)) {
-          continue;
-        }
-        // if memory access is MemoryUse
+      if (MA != nullptr && isa<MemoryUse>(MA)) {
         // propagate live information of clobbering instruction forward
 
         // MemoryUse が使用する MemoryLocation を取得しておく
@@ -77,12 +71,11 @@ bool AstgrepPass::runOnFunction(Function &F) {
         // MA の clobbering instruction の集合を見つける.
         InstSet clobberingInsts = this->assembleClobberingMemoryInst(MA, &location);
 
+        /*
         errs() << "---clobberingInstsBegin---" << "\n";
         this->dumpInstSet(clobberingInsts);
         errs() << "---clobberingInstsEnd---" << "\n";
-
-        // propagate live information of definitons forward from inst(use) to definitions
-        // TODO: instruction ではなくて、Value の生存情報を伝播させる。
+        */
         this->upAndMark(clobberingInsts, value, inst, bb);
       }
     }
@@ -92,12 +85,9 @@ bool AstgrepPass::runOnFunction(Function &F) {
 
 void AstgrepPass::upAndMark(InstSet clobberingInsts, const Value* value, Instruction* startInst, BasicBlock* startBB) {
   /**
-   * TODO: do not propate all Memoary Access for MemoryPhi
-   *       into both predecessor basic blocks
-   **/
-  errs() << "---start---" << "\n";
-
-  //
+   * Collect live information of Value to instLiveAfter / instLiveBefore
+   */
+  //errs() << "---start---" << "\n";
   bool alive = false;
   for(BasicBlock::reverse_iterator bbit = startBB->rbegin();
       bbit != startBB->rend(); bbit++) {
@@ -110,7 +100,6 @@ void AstgrepPass::upAndMark(InstSet clobberingInsts, const Value* value, Instruc
       } else {
         this->instLiveAfter[i]->insert(value);
         this->instLiveBefore[i]->insert(value);
-        i->dump();
       }
     }
     if (i == startInst) {
@@ -123,7 +112,7 @@ void AstgrepPass::upAndMark(InstSet clobberingInsts, const Value* value, Instruc
   for (auto predBB = pred_begin(startBB); predBB != pred_end(startBB); predBB++) {
     this->upAndMarkRec(clobberingInsts, value, *predBB);
   }
-  errs() << "---end---" << "\n";
+  //errs() << "---end---" << "\n";
 }
 
 void AstgrepPass::upAndMarkRec(InstSet clobberingInsts, const Value* value, BasicBlock* bb) {
@@ -138,7 +127,6 @@ void AstgrepPass::upAndMarkRec(InstSet clobberingInsts, const Value* value, Basi
     } else {
       this->instLiveAfter[i]->insert(value);
       this->instLiveBefore[i]->insert(value);
-      i->dump();
     }
   }
 
