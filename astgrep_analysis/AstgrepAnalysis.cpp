@@ -1,6 +1,8 @@
 #include "llvm/Pass.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Transforms/Utils/MemorySSA.h"
 
 using namespace llvm;
@@ -18,15 +20,16 @@ namespace {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const;
     void dumpInstSet(InstSet instSet);
 
-    // contain instructions which lives before/after a instruction
-    // instruction じゃなっくて変数まで剥いてやったほうがはやそう
     std::map<Instruction*, InstSet> instLiveBefore;
     std::map<Instruction*, InstSet> instLiveAfter;
 
   private:
+    MemorySSA* MSSA;
+    MemorySSAWalker* walker;
+
     void upAndMark(InstSet clobberingInsts, Instruction* useInst, BasicBlock* useBB);
     void upAndMarkRec(InstSet clobberingInsts, BasicBlock* bb);
-    InstSet assembleClobberingMemoryInst(MemoryAccess* clobberingMA, MemorySSAWalker* walker);
+    InstSet assembleClobberingMemoryInst(MemoryAccess* clobberingMA, const MemoryLocation* tartgetLoc);
     void dumpLiveInfo(Function* F);
   };
 }
@@ -38,8 +41,8 @@ void AstgrepPass::getAnalysisUsage(AnalysisUsage &AU) const {
 
 bool AstgrepPass::runOnFunction(Function &F) {
 
-  MemorySSA* MSSA = &getAnalysis<MemorySSAWrapperPass>().getMSSA();
-  MemorySSAWalker* walker = MSSA->getWalker();
+  MSSA = &getAnalysis<MemorySSAWrapperPass>().getMSSA();
+  walker = MSSA->getWalker();
 
   // initialize
   for(Function::iterator fit = F.begin(); fit != F.end(); fit++) {
@@ -57,6 +60,7 @@ bool AstgrepPass::runOnFunction(Function &F) {
       Instruction* inst = &*bbit;
       inst->dump();
 
+      // 各MemoryUseについて処理
       MemoryAccess* MA = MSSA->getMemoryAccess(inst);
       if (MA != nullptr) {
         MA->dump();
@@ -66,19 +70,22 @@ bool AstgrepPass::runOnFunction(Function &F) {
         // if memory access is MemoryUse
         // propagate live information of clobbering instruction forward
 
-        // get possible definitons
-        MemoryAccess* clobberingMA = walker->getClobberingMemoryAccess(MA);
-        InstSet clobberingInsts = this->assembleClobberingMemoryInst(clobberingMA, walker);
+        // MemoryUse が使用する MemoryLocation を取得しておく
+        MemoryLocation location = MemoryLocation::get(inst);
+
+        // MA の clobbering instruction の集合を見つける.
+        InstSet clobberingInsts = this->assembleClobberingMemoryInst(MA, &location);
+
         errs() << "---clobberingInstsBegin---" << "\n";
         this->dumpInstSet(clobberingInsts);
         errs() << "---clobberingInstsEnd---" << "\n";
 
         // propagate live information of definitons forward from inst(use) to definitions
+        // TODO: instruction ではなくて、Value の生存情報を伝播させる。
         this->upAndMark(clobberingInsts, inst, bb);
       }
     }
   }
-  // this->dumpLiveInfo(&F);
   return false;
 }
 
@@ -92,9 +99,10 @@ void AstgrepPass::upAndMark(InstSet clobberingInsts, Instruction* useInst, Basic
   for(BasicBlock::reverse_iterator bbit = useBB->rbegin();
       bbit != useBB->rend() && clobberingInsts->count(&*bbit) == 0;
       bbit++) {
+    // 基本ブロック先頭にたどり着くか、clobberingInsts のうちどれかにたどり着いたら終了
     Instruction* i = &*bbit;
     if (liveUseInst) {
-      i->dump();
+      // i->dump();
       this->instLiveAfter[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
       this->instLiveBefore[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
     }
@@ -113,8 +121,9 @@ void AstgrepPass::upAndMarkRec(InstSet clobberingInsts, BasicBlock* bb) {
   for(BasicBlock::reverse_iterator bbit = bb->rbegin();
       bbit != bb->rend() && clobberingInsts->count(&*bbit) == 0;
       bbit++) {
+    // 基本ブロック先頭にたどり着くか、clobberingInsts のうちどれかにたどり着いたら終了
     Instruction* i = &*bbit;
-    i->dump();
+    // i->dump();
     this->instLiveAfter[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
     this->instLiveBefore[i]->insert(clobberingInsts->begin(), clobberingInsts->end());
   }
@@ -124,29 +133,37 @@ void AstgrepPass::upAndMarkRec(InstSet clobberingInsts, BasicBlock* bb) {
   }
 }
 
-InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* clobberingMA, MemorySSAWalker* walker) {
-  // assemble all instruction of clobbering memory access
-  // if clobbering memory access is a memory def:
-  //   return set which contain only the memory def instruction
-  // else if memory access is a memory phi
-  //   return set which contain all incoming memory access instruction
+InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* MA, const MemoryLocation* targetLoc) {
+  /**
+   * Assemble MemoryAccess's clobbering instructions
+   */
 
   InstSet instSet = new std::set<Instruction*>();
 
-  // clobberingMemoryAccess should be MemoryPhi or MemoryDef
-  MemoryUseOrDef* memoryUseOrDef = dyn_cast<MemoryUseOrDef>(clobberingMA);
-  MemoryPhi* memoryPhi = dyn_cast<MemoryPhi>(clobberingMA);
+  MemoryUse* memoryUse = dyn_cast<MemoryUse>(MA);
+  MemoryDef* memoryDef = dyn_cast<MemoryDef>(MA);
+  MemoryPhi* memoryPhi = dyn_cast<MemoryPhi>(MA);
 
-  if (memoryUseOrDef != nullptr) {
-    if (isa<MemoryDef>(memoryUseOrDef)) {
-      Instruction *instruction = memoryUseOrDef->getMemoryInst();
-      instSet->insert(instruction);
+  if (memoryUse != nullptr) {
+    // TODO: check is it really (must alias of) MA
+    MemoryAccess* clobberingMA = walker->getClobberingMemoryAccess(MA);
+
+    InstSet clobbringInstSet = this->assembleClobberingMemoryInst(clobberingMA, targetLoc);
+    for (auto inst = clobbringInstSet->begin(); inst != clobbringInstSet->end(); inst++) {
+      instSet->insert(*inst);
     }
+  } else if (memoryDef != nullptr) {
+    Instruction *instruction = memoryDef->getMemoryInst();
+    instSet->insert(instruction);
   } else if (memoryPhi != nullptr) {
     for (unsigned int i = 0; i < memoryPhi->getNumOperands(); i++) {
-      // get all incoming memory access
+      // MemoryPhi の各先行基本ブロックのうち、それぞれ最後の ClobberingMemoryAccess を取得
       MemoryAccess* incomingMA = memoryPhi->getIncomingValue(i);
-      InstSet clobbringInstSet = this->assembleClobberingMemoryInst(incomingMA, walker);
+
+      // incomingMA は必ずしも targetLoc に関する MemoryAccess とは限らない
+      // もういっちょ clobberingMemoryAccess を取得
+      MemoryAccess* anotherClobbering = walker->getClobberingMemoryAccess(incomingMA, *targetLoc);
+      InstSet clobbringInstSet = this->assembleClobberingMemoryInst(anotherClobbering, targetLoc);
       for (auto inst = clobbringInstSet->begin(); inst != clobbringInstSet->end(); inst++) {
         instSet->insert(*inst);
       }
