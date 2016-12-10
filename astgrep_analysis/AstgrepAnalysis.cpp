@@ -25,6 +25,7 @@ namespace {
     std::map<Instruction*, ValueSet> instLiveAfter;
 
   private:
+    AAResults* AAR;
     MemorySSA* MSSA;
     MemorySSAWalker* walker;
 
@@ -37,10 +38,12 @@ namespace {
 void AstgrepPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequired<MemorySSAWrapperPass>();
+  AU.addRequired<AAResultsWrapperPass>();
 }
 
 bool AstgrepPass::runOnFunction(Function &F) {
 
+  AAR = &getAnalysis<AAResultsWrapperPass>().getAAResults();
   MSSA = &getAnalysis<MemorySSAWrapperPass>().getMSSA();
   walker = MSSA->getWalker();
 
@@ -148,15 +151,37 @@ InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* MA, const Memory
 
   if (memoryUse != nullptr) {
     // TODO: check is it really (must alias of) MA
-    MemoryAccess* clobberingMA = walker->getClobberingMemoryAccess(MA);
+    MemoryAccess* clobberingMA = walker->getClobberingMemoryAccess(MA, *targetLoc);
 
     InstSet clobbringInstSet = this->assembleClobberingMemoryInst(clobberingMA, targetLoc);
     for (auto inst = clobbringInstSet->begin(); inst != clobbringInstSet->end(); inst++) {
       instSet->insert(*inst);
     }
   } else if (memoryDef != nullptr) {
+    // MemoryDef maybe call function
     Instruction *instruction = memoryDef->getMemoryInst();
-    instSet->insert(instruction);
+    if (!isa<StoreInst>(instruction)) {
+      // targetLoc なしで clobberingMemoryAccesss を取得する
+      MemoryAccess* anotherClobberingMA = walker->getClobberingMemoryAccess(MA);
+      InstSet clobbringInstSet = this->assembleClobberingMemoryInst(anotherClobberingMA, targetLoc);
+      for (auto inst = clobbringInstSet->begin(); inst != clobbringInstSet->end(); inst++) {
+        instSet->insert(*inst);
+      }
+    } else {
+
+      // clobbering
+      const MemoryLocation location = MemoryLocation::get(instruction);
+      if (AAR->isMustAlias(location, *targetLoc)) {
+        errs() << "must alias" << "\n";
+        instSet->insert(instruction);
+      } else {
+        MemoryAccess* anotherClobberingMA = walker->getClobberingMemoryAccess(MA);
+        InstSet clobbringInstSet = this->assembleClobberingMemoryInst(anotherClobberingMA, targetLoc);
+        for (auto inst = clobbringInstSet->begin(); inst != clobbringInstSet->end(); inst++) {
+          instSet->insert(*inst);
+        }
+      }
+    }
   } else if (memoryPhi != nullptr) {
     for (unsigned int i = 0; i < memoryPhi->getNumOperands(); i++) {
       // MemoryPhi の各先行基本ブロックのうち、それぞれ最後の ClobberingMemoryAccess を取得
@@ -164,6 +189,7 @@ InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* MA, const Memory
 
       // incomingMA は必ずしも targetLoc に関する MemoryAccess とは限らない
       // もういっちょ clobberingMemoryAccess を取得
+      // 上で MA が MemoryDef だったときに must alias か確認してるので不要かも
       MemoryAccess* anotherClobbering = walker->getClobberingMemoryAccess(incomingMA, *targetLoc);
       InstSet clobbringInstSet = this->assembleClobberingMemoryInst(anotherClobbering, targetLoc);
       for (auto inst = clobbringInstSet->begin(); inst != clobbringInstSet->end(); inst++) {
