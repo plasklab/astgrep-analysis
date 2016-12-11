@@ -89,7 +89,16 @@ bool AstgrepPass::runOnFunction(Function &F) {
 void AstgrepPass::upAndMark(InstSet clobberingInsts, const Value* value, Instruction* startInst, BasicBlock* startBB) {
   /**
    * Collect live information of Value to instLiveAfter / instLiveBefore
+   * TODO: startInst にぶつかったら停止してほしい
+   *
+   * int c = 1;
+   * for (int i = 0; i < 10; i++) {
+   *   printf("%d", c);
+   * }
+   * のようなプログラム(printf の clobberingMemoryAccess がfor-loop外)
+   * のとき無限ループに陥る
    */
+
   //errs() << "---start---" << "\n";
   bool alive = false;
   for(BasicBlock::reverse_iterator bbit = startBB->rbegin();
