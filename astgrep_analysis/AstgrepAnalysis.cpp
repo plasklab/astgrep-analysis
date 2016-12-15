@@ -3,6 +3,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
+#include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/Transforms/Utils/MemorySSA.h"
 
 using namespace llvm;
@@ -20,6 +21,7 @@ namespace {
     virtual bool runOnFunction(Function &F);
     virtual void getAnalysisUsage(AnalysisUsage &AU) const;
     void dumpInstSet(InstSet instSet);
+    void dumpValueSet(ValueSet valueSet);
 
     std::map<Instruction*, ValueSet> instLiveBefore;
     std::map<Instruction*, ValueSet> instLiveAfter;
@@ -80,39 +82,29 @@ bool AstgrepPass::runOnFunction(Function &F) {
         errs() << "---clobberingInstsEnd---" << "\n";
         */
         this->upAndMark(clobberingInsts, value, inst, bb);
+
       }
+      inst->dump();
+      errs() << "--- live before ---" << "\n";
+      dumpValueSet(instLiveBefore[inst]);
+      errs() << "--- live after ---" << "\n";
+      dumpValueSet(instLiveAfter[inst]);
+      errs() << "\n";
     }
   }
+
   return false;
 }
 
 void AstgrepPass::upAndMark(InstSet clobberingInsts, const Value* value, Instruction* startInst, BasicBlock* startBB) {
-  /**
-   * Collect live information of Value to instLiveAfter / instLiveBefore
-   * TODO: startInst にぶつかったら停止してほしい
-   *
-   * int c = 1;
-   * for (int i = 0; i < 10; i++) {
-   *   printf("%d", c);
-   * }
-   * のようなプログラム(printf の clobberingMemoryAccess がfor-loop外)
-   * のとき無限ループに陥る
-   */
-
   //errs() << "---start---" << "\n";
   bool alive = false;
   for(BasicBlock::reverse_iterator bbit = startBB->rbegin();
       bbit != startBB->rend(); bbit++) {
     Instruction* i = &*bbit;
     if (alive) {
-      if (clobberingInsts->find(i) != clobberingInsts->end()) {
-        // 定義命令までたどり着いた場合
-        this->instLiveAfter[i]->insert(value);
-        return;
-      } else {
-        this->instLiveAfter[i]->insert(value);
-        this->instLiveBefore[i]->insert(value);
-      }
+      this->instLiveAfter[i]->insert(value);
+      this->instLiveBefore[i]->insert(value);
     }
     if (i == startInst) {
       this->instLiveBefore[i]->insert(value);
@@ -181,7 +173,6 @@ InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* MA, const Memory
       // clobbering
       const MemoryLocation location = MemoryLocation::get(instruction);
       if (AAR->isMustAlias(location, *targetLoc)) {
-        errs() << "must alias" << "\n";
         instSet->insert(instruction);
       } else {
         MemoryAccess* anotherClobberingMA = walker->getClobberingMemoryAccess(MA);
@@ -212,6 +203,17 @@ InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* MA, const Memory
 void AstgrepPass::dumpInstSet(InstSet instSet) {
   for (auto inst = instSet->begin(); inst != instSet->end(); inst++) {
     (*inst)->dump();
+  }
+}
+
+void AstgrepPass::dumpValueSet(ValueSet valueSet) {
+  for (auto value = valueSet->begin(); value != valueSet->end(); value++) {
+    (*value)->dump();
+    /*
+    if (isa<Instruction>(*value)) {
+      Instruction* inst = dyn_cast<Instruction*>(value);
+    }
+     */
   }
 }
 
