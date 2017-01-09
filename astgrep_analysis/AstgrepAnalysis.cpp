@@ -1,10 +1,14 @@
+#include <string>
 #include "llvm/Pass.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/Transforms/Utils/MemorySSA.h"
+
+#include "EDNEmitter.h"
 
 using namespace llvm;
 
@@ -25,6 +29,7 @@ namespace {
 
     std::map<Instruction*, ValueSet> instLiveBefore;
     std::map<Instruction*, ValueSet> instLiveAfter;
+    std::map<const Value*, const DbgDeclareInst*> dbgDeclareInstOf;
 
   private:
     AAResults* AAR;
@@ -56,6 +61,10 @@ bool AstgrepPass::runOnFunction(Function &F) {
       Instruction* i = &*bbit;
       this->instLiveAfter[i] = new std::set<const Value*>();
       this->instLiveBefore[i] = new std::set<const Value*>();
+      DbgDeclareInst* dbgInst = dyn_cast<DbgDeclareInst>(i);
+      if (dbgInst != nullptr) {
+        this->dbgDeclareInstOf[dbgInst->getAddress()] = dbgInst;
+      }
     }
   }
 
@@ -82,16 +91,28 @@ bool AstgrepPass::runOnFunction(Function &F) {
         errs() << "---clobberingInstsEnd---" << "\n";
         */
         this->upAndMark(clobberingInsts, value, inst, bb);
-
       }
+      /*
       inst->dump();
       errs() << "--- live before ---" << "\n";
       dumpValueSet(instLiveBefore[inst]);
       errs() << "--- live after ---" << "\n";
       dumpValueSet(instLiveAfter[inst]);
       errs() << "\n";
+      */
     }
   }
+  EDNEmitter* emitter = new EDNEmitter(instLiveBefore, instLiveAfter, dbgDeclareInstOf);
+  errs() << "[";
+  for(Function::iterator fit = F.begin(); fit != F.end(); fit++) {
+    BasicBlock *bb = &*fit;
+    for (BasicBlock::iterator bbit = bb->begin(); bbit != bb->end(); bbit++) {
+      Instruction* i = &*bbit;
+      std::string edn = emitter->getLiveInfo(i);
+      errs() << edn;
+    }
+  }
+  errs() << "]";
 
   return false;
 }
@@ -208,12 +229,16 @@ void AstgrepPass::dumpInstSet(InstSet instSet) {
 
 void AstgrepPass::dumpValueSet(ValueSet valueSet) {
   for (auto value = valueSet->begin(); value != valueSet->end(); value++) {
-    (*value)->dump();
-    /*
-    if (isa<Instruction>(*value)) {
-      Instruction* inst = dyn_cast<Instruction*>(value);
+    if (this->dbgDeclareInstOf.find(*value) != this->dbgDeclareInstOf.end()) {
+      dbgDeclareInstOf[*value]->dump();
+      if (dbgDeclareInstOf[*value]->hasMetadata()) {
+        DebugLoc loc = dbgDeclareInstOf[*value]->getDebugLoc();
+        int line = loc.getLine();
+        int col = loc.getCol();
+        errs() << "line: " << line << " | col: " << col << "\n";
+      } else {
+      }
     }
-     */
   }
 }
 

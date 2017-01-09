@@ -1,4 +1,4 @@
-add_library(astgrep MODULE AstgrepAnalysis.cpp)
+add_library(astgrep MODULE AstgrepAnalysis.cpp EDNEmitter.cpp)
 
 target_compile_features(astgrep PRIVATE cxx_range_for cxx_auto_type)
 
