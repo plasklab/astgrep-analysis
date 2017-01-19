@@ -47,13 +47,13 @@ std::string EDNEmitter::getLiveVariablesEdn(ValueSet valueSet) {
   std::ostringstream os;
   os << "[";
   for (auto value = valueSet->begin(); value != valueSet->end(); value++) {
-    os << "{";
     if (this->dbgDeclareInstOf.find(*value) != this->dbgDeclareInstOf.end() && dbgDeclareInstOf[*value]->hasMetadata()) {
+      os << "{";
       DebugLoc loc = dbgDeclareInstOf[*value]->getDebugLoc();
       os << ":line " << loc.getLine() << " ";
       os << ":col " << loc.getCol();
+      os << "}";
     }
-    os << "}";
   }
   os << "]";
   return os.str();
