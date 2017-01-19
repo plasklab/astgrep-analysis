@@ -124,8 +124,14 @@ void AstgrepPass::upAndMark(InstSet clobberingInsts, const Value* value, Instruc
       bbit != startBB->rend(); bbit++) {
     Instruction* i = &*bbit;
     if (alive) {
-      this->instLiveAfter[i]->insert(value);
-      this->instLiveBefore[i]->insert(value);
+      if (clobberingInsts->find(i) != clobberingInsts->end()) {
+        // 定義命令までたどり着いた場合
+        this->instLiveAfter[i]->insert(value);
+        return;
+      } else {
+        this->instLiveAfter[i]->insert(value);
+        this->instLiveBefore[i]->insert(value);
+      }
     }
     if (i == startInst) {
       this->instLiveBefore[i]->insert(value);
