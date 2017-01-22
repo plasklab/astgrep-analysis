@@ -187,16 +187,16 @@ InstSet AstgrepPass::assembleClobberingMemoryInst(MemoryAccess* MA, const Memory
     }
   } else if (memoryDef != nullptr) {
     // MemoryDef maybe call function
+    // icmp命令が返す値もMemoryDefだがgetMemoryInstはないはず
     Instruction *instruction = memoryDef->getMemoryInst();
-    if (!isa<StoreInst>(instruction)) {
+    if (instruction != nullptr && !isa<StoreInst>(instruction)) {
       // targetLoc なしで clobberingMemoryAccesss を取得する
       MemoryAccess* anotherClobberingMA = walker->getClobberingMemoryAccess(MA);
       InstSet clobbringInstSet = this->assembleClobberingMemoryInst(anotherClobberingMA, targetLoc);
       for (auto inst = clobbringInstSet->begin(); inst != clobbringInstSet->end(); inst++) {
         instSet->insert(*inst);
       }
-    } else {
-
+    } else if(instruction != nullptr) {
       // clobbering
       const MemoryLocation location = MemoryLocation::get(instruction);
       if (AAR->isMustAlias(location, *targetLoc)) {
