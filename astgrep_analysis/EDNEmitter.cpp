@@ -41,8 +41,8 @@ std::string EDNEmitter::getDataflowInfo(Instruction* inst) {
   os << ":col " << inst->getDebugLoc().getCol() << "\n";
 
   // TODO: use edn library
-  os << ":live_before " << this->getLiveVariablesEdn(liveBeforeValues) << "\n";
-  os << ":live_after " << this->getLiveVariablesEdn(liveAfterValues) << "\n";
+  os << ":before " << this->getLiveVariablesEdn(liveBeforeValues) << "\n";
+  os << ":after " << this->getLiveVariablesEdn(liveAfterValues) << "\n";
   os << ":reach " << this->getReachingDefinitionsEdn(reachingInstructions) << "\n";
   os << "}" << "\n";
   return os.str();
