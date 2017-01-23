@@ -29,6 +29,7 @@ namespace {
 
     std::map<Instruction*, ValueSet> instLiveBefore;
     std::map<Instruction*, ValueSet> instLiveAfter;
+    std::map<Instruction*, InstSet> reachingDefinitions;
     std::map<const Value*, const DbgDeclareInst*> dbgDeclareInstOf;
 
   private:
@@ -61,6 +62,7 @@ bool AstgrepPass::runOnFunction(Function &F) {
       Instruction* i = &*bbit;
       this->instLiveAfter[i] = new std::set<const Value*>();
       this->instLiveBefore[i] = new std::set<const Value*>();
+      this->reachingDefinitions[i] = new std::set<Instruction*>();
       DbgDeclareInst* dbgInst = dyn_cast<DbgDeclareInst>(i);
       if (dbgInst != nullptr) {
         this->dbgDeclareInstOf[dbgInst->getAddress()] = dbgInst;
@@ -84,6 +86,7 @@ bool AstgrepPass::runOnFunction(Function &F) {
 
         // MA の clobbering instruction の集合を見つける.
         InstSet clobberingInsts = this->assembleClobberingMemoryInst(MA, &location);
+        this->reachingDefinitions[inst] = clobberingInsts;
 
         /*
         errs() << "---clobberingInstsBegin---" << "\n";
@@ -102,13 +105,13 @@ bool AstgrepPass::runOnFunction(Function &F) {
       */
     }
   }
-  EDNEmitter* emitter = new EDNEmitter(instLiveBefore, instLiveAfter, dbgDeclareInstOf);
+  EDNEmitter* emitter = new EDNEmitter(instLiveBefore, instLiveAfter, reachingDefinitions, dbgDeclareInstOf);
   errs() << "[";
   for(Function::iterator fit = F.begin(); fit != F.end(); fit++) {
     BasicBlock *bb = &*fit;
     for (BasicBlock::iterator bbit = bb->begin(); bbit != bb->end(); bbit++) {
       Instruction* i = &*bbit;
-      std::string edn = emitter->getLiveInfo(i);
+      std::string edn = emitter->getDataflowInfo(i);
       errs() << edn;
     }
   }

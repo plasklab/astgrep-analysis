@@ -9,26 +9,30 @@
 using namespace llvm;
 
 typedef std::set<const Value*>* ValueSet;
+typedef std::set<Instruction*>* InstSet;
 
 EDNEmitter::EDNEmitter(
   std::map<Instruction*, ValueSet> instLiveBefore,
   std::map<Instruction*, ValueSet> instLiveAfter,
+  std::map<Instruction*, InstSet> reachingDefinitions,
   std::map<const Value*, const DbgDeclareInst*> dbgDeclareInstOf
 ) {
   this->instLiveBefore = instLiveBefore;
   this->instLiveAfter = instLiveAfter;
+  this->reachingDefinitions = reachingDefinitions;
   this->dbgDeclareInstOf = dbgDeclareInstOf;
 }
 
-std::string EDNEmitter::getLiveInfo(Instruction* inst) {
+std::string EDNEmitter::getDataflowInfo(Instruction* inst) {
   std::ostringstream os;
+  InstSet reachingInstructions = this->reachingDefinitions[inst];
   ValueSet liveBeforeValues = this->instLiveBefore[inst];
   ValueSet liveAfterValues = this->instLiveAfter[inst];
 
   if (!inst->hasMetadata()) {
     return "";
   }
-  if (liveBeforeValues->size() == 0 && liveAfterValues->size() == 0) {
+  if (liveBeforeValues->size() == 0 && liveAfterValues->size() == 0 && reachingInstructions->size() == 0) {
     return "";
   }
 
@@ -39,6 +43,7 @@ std::string EDNEmitter::getLiveInfo(Instruction* inst) {
   // TODO: use edn library
   os << ":live_before " << this->getLiveVariablesEdn(liveBeforeValues) << "\n";
   os << ":live_after " << this->getLiveVariablesEdn(liveAfterValues) << "\n";
+  os << ":reach " << this->getReachingDefinitionsEdn(reachingInstructions) << "\n";
   os << "}" << "\n";
   return os.str();
 }
@@ -52,7 +57,24 @@ std::string EDNEmitter::getLiveVariablesEdn(ValueSet valueSet) {
       DebugLoc loc = dbgDeclareInstOf[*value]->getDebugLoc();
       os << ":line " << loc.getLine() << " ";
       os << ":col " << loc.getCol();
-      os << "}";
+      os << "} ";
+    }
+  }
+  os << "]";
+  return os.str();
+}
+
+std::string EDNEmitter::getReachingDefinitionsEdn(InstSet instSet) {
+  std::ostringstream os;
+  os << "[";
+  for (auto inst_it = instSet->begin(); inst_it != instSet->end(); inst_it++) {
+    Instruction* inst = *inst_it;
+    if (inst->hasMetadata()) {
+      DebugLoc loc = inst->getDebugLoc();
+      os << "{";
+      os << ":line " << loc.getLine() << " ";
+      os << ":col " << loc.getCol();
+      os << "} ";
     }
   }
   os << "]";
